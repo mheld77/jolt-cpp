@@ -1,189 +1,42 @@
-JOLT (Community Edition)
-========
-[![CI](https://github.com/jolt-community/jolt-community/actions/workflows/ci.yml/badge.svg)](https://github.com/jolt-community/jolt-community/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/jolt-community/jolt-community/graph/badge.svg?token=ZH2ZCH1J8Y)](https://codecov.io/gh/jolt-community/jolt-community)
+# Jolt C++
 
-JSON to JSON transformation library written in Java where the "specification" for the transform is itself a JSON document.
+A native C++20 library for Jolt-style JSON-to-JSON transformations. Pass a JSON document and a Chainr specification to `jolt::transform` to get the transformed JSON. The library runs without a JVM.
 
-### Community Edition
-This repository is a community-maintained fork of JOLT. For the original version, please visit the [bazaarvoice/jolt](https://github.com/bazaarvoice/jolt) repository.
+## Build and test
 
-### Useful For
+Requires CMake, a C++20 compiler, and nlohmann/json 3.11 or newer.
 
-1. Transforming JSON data from ElasticSearch, MongoDb, Cassandra, etc before sending it off to the world
-2. Extracting data from a large JSON documents for your own consumption
-
-## Table of Contents
-
-   1. [Overview](#overview)
-   2. [Documentation](#documentation)
-   3. [Shiftr Transform DSL](#shiftr-transform-dsl)
-   4. [Demo](#demo)
-   5. [Getting Started](#getting-started)
-   6. [Getting Transform Help](#getting-transform-help)
-   7. [Why Jolt Exists](#why-jolt-exists)
-   8. [Alternatives](#alternatives)
-   9. [Performance](#performance)
-   10. [CLI](#jolt-cli)
-   11. [Release Checklist](#release-checklist)
-   12. [Release Notes](#release-notes)
-
-## Overview
-
-Jolt :
-
-* provides a set of transforms, that can be "chained" together to form the overall JSON to JSON transform.
-* focuses on transforming the *structure* of your JSON data, not manipulating specific values
-    * The idea being: use Jolt to get most of the structure right, then write code to fix values
-* consumes and produces "hydrated" JSON : in-memory tree of Maps, Lists, Strings, etc.
-    * use Jackson (or whatever) to serialize and deserialize the JSON text
-
-### Stock Transforms
-
-The Stock transforms are:
-
-    shift       : copy data from the input tree and put it the output tree
-    default     : apply default values to the tree
-    remove      : remove data from the tree
-    sort        : sort the Map key values alphabetically ( for debugging and human readability )
-    cardinality : "fix" the cardinality of input data.  Eg, the "urls" element is usually a List, but if there is only one, then it is a String
-
-Each transform has its own DSL (Domain Specific Language) in order to facilitate its narrow job.
-
-Currently, all the Stock transforms just effect the "structure" of the data.
-To do data manipulation, you will need to write Java code.   If you write your Java "data manipulation" code to implement the Transform interface, then you can insert your code in the transform chain.
-
-The out-of-the-box Jolt transforms should be able to do most of your structural transformation, with custom Java Transforms implementing your data manipulation.
-
-## Documentation
-
-Jolt [Slide Deck](https://docs.google.com/presentation/d/1sAiuiFC4Lzz4-064sg1p8EQt2ev0o442MfEbvrpD1ls/edit?usp=sharing) : covers motivation, development, and transforms.
-
-Javadoc explaining each transform DSL :
-
-* [shift](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/Shiftr.java)
-* [default](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/Defaultr.java)
-* [remove](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/Removr.java)
-* [cardinality](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/CardinalityTransform.java)
-* [sort](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/Sortr.java)
-* full qualified Java ClassName : Class implements the Transform or ContextualTransform interfaces, and can optionally be SpecDriven (marker interface)
-    * [Transform](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/Transform.java) interface
-    * [SpecDriven](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/SpecDriven.java)
-        * where the "input" is "hydrated" Java version of your JSON Data
-
-Running a Jolt transform means creating an instance of [Chainr](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/Chainr.java)  with a list of transforms.
-
-The JSON spec for Chainr looks like : [unit test](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/test/resources/json/chainr/integration/firstSample.json).
-
-The Java side looks like :
-
-``` java
-Chainr chainr = JsonUtils.classpathToList( "/path/to/chainr/spec.json" );
-
-Object input = elasticSearchHit.getSource(); // ElasticSearch already returns hydrated JSon
-
-Object output = chainr.transform( input );
-
-return output;
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --install build --prefix "$PWD/build/install"
 ```
 
-### Shiftr Transform DSL
+Link the CMake target `jolt_cpp` or the installed static library `libjolt_cpp.a` and include [jolt/jolt.hpp](include/jolt/jolt.hpp).
 
-The Shiftr transform generally does most of the "heavy lifting" in the transform chain.
-To see the Shiftr DSL in action, please look at our unit tests ([shiftr tests](https://github.com/jolt-community/jolt-community/tree/main/jolt-core/src/test/resources/json/shiftr)) for nice bite sized transform examples, and read the extensive Shiftr [javadoc](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/main/java/io/joltcommunity/jolt/Shiftr.java).
+```cpp
+#include <jolt/jolt.hpp>
 
-Our unit tests follow the pattern :
-
-``` json
-{
-    "input": {
-        // sample input
-    },
-
-    "spec": {
-        // transform spec
-    },
-
-    "expected": {
-        // what the output of the transform looks like
-    }
-}
+auto result = jolt::transform(
+    R"({"title":"Coffee"})",
+    R"([{"operation":"shift","spec":{"title":"product.name"}}])");
+// {"product":{"name":"Coffee"}}
 ```
 
-We read in "input", apply the "spec", and [Diffy](https://github.com/jolt-community/jolt-community/blob/main/json-utils/src/main/java/io/joltcommunity/jolt/Diffy.java) it against the "expected".
+## Supported syntax
 
-To learn the Shiftr DSL, examine "input" and "output" json, get an understanding of how data is moving, and *then* look at the transform spec to see how it facilitates the transform.
+| Operation | Coverage |
+| --- | --- |
+| `shift` | Literal keys and alternatives, a single wildcard per pattern, nested output paths, `&n`, `&(n,1)`, explicit indexes, `[]`, `[#n]`, `@`, `@(n,path)`, `$n`, and `#value`. |
+| `default`, `remove`, `cardinality` | Literal keys, explicit indexes on existing arrays and simple wildcards. `remove` supports literal alternatives. Cardinality supports `ONE` and `MANY`. |
+| `modify-overwrite-beta`, `modify-default-beta`, `modify-define-beta` | Literal values and nested keys. |
+| `sort` | Recursive sorting of object keys. |
 
-For reference, [this](https://github.com/jolt-community/jolt-community/blob/main/jolt-core/src/test/resources/json/shiftr/firstSample.json) was the very first test we wrote.
+Compatibility with the Java DSL is partial. Modifier functions, transposed array indexes, multiple-wildcard patterns, custom Java classes, and extra operations such as `enrich` are outside the current coverage. The engine limits input and output size, nesting, array indexes, and work per transformation. See the header for public exception types.
 
+## Reference and licensing
 
-## Demo
+[Jolt Community](https://github.com/jolt-community/jolt-community), a fork of Bazaarvoice Jolt, is the reference for the transformation contract. The C++ implementation and its reference revision are documented in [NOTICE](NOTICE).
 
-There is a demo available at [jolt-demo.appspot.com](http://jolt-demo.appspot.com/).
-You can paste in JSON input data and a Spec, and it will post the data to server and run the transform.
-
-Note
-
-* it is hosted on a free Google App Engine instance, so it may take a minute to spin up.
-* it validates in input JSON and spec client side.
-
-## Getting Started
-
-Getting started code wise has its [own doc](gettingStarted.md).
-
-## Getting Transform Help
-
-If you can't get a transform working and you need help, create and Issue in Jolt (for now).
-
-Make sure you include what your "input" is, and what you want your "output" to be.
-
-## Why Jolt Exists
-
-Aside from writing your own custom code to do a transform, there are two general approaches to doing a JSON to JSON transforms in Java.
-
-1) JSON -> XML -> XSLT or STX -> XML -> JSON
-
-Aside from being a Rube Goldberg approach, XSLT is more complicated than Jolt because it is trying to do the whole transform with a single DSL.
-
-2) Write a Template (Velocity, FreeMarker, etc) that take hydrated JSON input and write textual JSON output
-
-With this approach you are working from the output format backwards to the input, which is complex for any non-trivial transform.
-Eg, the structure of your template will be dictated by the output JSON format, and you will end up coding a parallel tree walk of the input data and the output format in your template.
-Jolt works forward from the input data to the output format which is simpler, and it does the parallel tree walk for you.
-
-## Alternatives
-
-Being in the Java JSON processing "space", here are some other interesting JSON manipulation tools to look at / consider :
-
-* [jq](https://stedolan.github.io/jq) - Awesome command line tool to extract data from JSON files (use it all the time, available via brew)
-* [JsonPath](https://github.com/jayway/JsonPath) - Java : Extract data from JSON using XPATH like syntax.
-* [JsonSurfer](https://github.com/jsurfer/JsonSurfer) - Java : Streaming JsonPath processor dedicated to processing big and complicated JSON data.
-
-## Performance
-
-The primary goal of Jolt was to improve "developer speed" by providing the ability to have a declarative rather than imperative transforms.
-That said, Jolt should have a better runtime than the alternatives listed above.
-
-Work has been done to make the stock Jolt transforms fast:
-
-1. Transforms can be initialized once with their spec, and re-used many times in a multi-threaded environment.
-    * We reuse initialized Jolt transforms to service multiple web requests from a DropWizard service.
-2. "*" wildcard logic was redone to reduce the use of Regex in the common case, which was a dramatic speed improvement.
-3. The parallel tree walk performed by Shiftr was optimized.
-
-Two things to be aware of :
-
-1. Jolt is not "stream" based, so if you have a very large Json document to transform you need to have enough memory to hold it.
-2. The transform process will create and discard a lot of objects, so the garbage collector will have work to do.
-
-## Jolt CLI
-
-Jolt Transforms and tools can be run from the command line. Command line interface doc [here](cli/README.md).
-
-## Release Checklist
-
-To publish a new version of Jolt, follow the [Release checklist](./docs/release_checklist.md).
-
-## Release Notes
-
-[Versions and Release Notes available here](https://github.com/jolt-community/jolt-community/releases).
+The library is distributed under the [Apache License 2.0](LICENSE). Its nlohmann/json dependency is distributed under the [MIT license](LICENSE.nlohmann-json).

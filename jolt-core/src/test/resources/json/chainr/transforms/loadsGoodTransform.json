@@ -1,8 +1,0 @@
-[
-    {
-        "operation": "io.joltcommunity.jolt.chainr.transforms.GoodTestTransform",
-        "spec": {
-            "a": "b"
-        }
-    }
-]

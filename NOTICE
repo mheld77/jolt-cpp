@@ -1,0 +1,14 @@
+Jolt C++
+
+Native implementation of a subset of the Chainr transformation contract.
+Reference: JOLT Community Edition
+https://github.com/jolt-community/jolt-community
+Reference revision: 401b1df4ec61f6b66e498b28e2d3c67de21274f7
+JOLT Community Edition is based on JOLT, copyright 2013 Bazaarvoice, Inc.
+Both reference projects are distributed under the Apache License, Version 2.0.
+
+The sources in this directory implement the transformations in C++ with
+nlohmann/json. They do not contain the Java runtime or a translation of the
+upstream Java source files. The supported syntax is documented in README.md.
+
+The C++ library uses nlohmann/json, licensed under MIT.
