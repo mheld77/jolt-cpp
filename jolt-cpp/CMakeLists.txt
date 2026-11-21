@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.18)
+project(apolo_jolt_cpp LANGUAGES CXX)
+
+find_package(nlohmann_json 3.11 REQUIRED)
+add_library(jolt_cpp STATIC src/jolt.cpp)
+target_compile_features(jolt_cpp PUBLIC cxx_std_20)
+target_include_directories(jolt_cpp PUBLIC include)
+target_link_libraries(jolt_cpp PRIVATE nlohmann_json::nlohmann_json)
+target_compile_options(jolt_cpp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+include(GNUInstallDirs)
+install(TARGETS jolt_cpp ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES LICENSE LICENSE.nlohmann-json NOTICE DESTINATION ${CMAKE_INSTALL_DOCDIR})
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(jolt_cpp_tests tests/transform.cpp)
+    target_link_libraries(jolt_cpp_tests PRIVATE jolt_cpp nlohmann_json::nlohmann_json)
+    add_test(NAME jolt_cpp_transform COMMAND jolt_cpp_tests)
+endif()
