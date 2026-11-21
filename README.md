@@ -219,7 +219,22 @@ The install directory contains the static library, [public header](include/jolt/
 | `modify-overwrite-beta`, `modify-default-beta`, `modify-define-beta` | Literal values, nested keys, array indexes, wildcards, relative references, fallback expressions, per-key mode overrides, and built-in string, numeric, type conversion, and list functions. |
 | `sort` | Recursive sorting of object keys. |
 
-Compatibility with the Java DSL is partial. Some advanced matching rules and Community-specific functions remain unsupported, as do custom Java classes and extra operations such as `enrich`. Pass a JSON context as the third argument to `jolt::transform` to resolve modifier context references such as `^(1,key)`. The engine limits input and output size, nesting, array indexes, and work per transformation. See the header for public exception types.
+Pass a JSON context as the third argument to `jolt::transform` to resolve modifier context references such as `^(1,key)`. The engine limits input and output size, nesting, array indexes, and work per transformation. See the [public header](include/jolt/jolt.hpp) for exception types.
+
+## Java compatibility and migration
+
+Compatibility with the Java DSL is partial. The table lists the known gaps most relevant to migrating existing specifications.
+
+| Area | Current gaps |
+| --- | --- |
+| `shift` | Dynamic input keys using `&` and escaped input keys are unsupported. Overlapping wildcard rules can resolve in a different order. |
+| `modify-*-beta` | Some advanced key patterns and Community-specific functions such as `dateAdd` are unsupported. Type coercion, nulls, and missing references need broader comparison across functions. |
+| `remove`, `cardinality` | Partial wildcards such as `prefix*` are unsupported. `cardinality` also rejects key alternatives such as `a&#124;b`. |
+| Extension operations | `enrich` and custom Java transform classes require separate native implementations. |
+
+CTest covers the native engine. A separate comparison against Jolt Java 0.1.1 matched 18 Jolt Community fixtures and six additional modifier and advanced shift cases. The local test commands above run without a JVM.
+
+Before switching an existing application, replay its saved specifications with representative input in both engines. Compare parsed JSON output, including array order, and include inputs with missing and null fields. Keep the Java engine available for mappings whose results differ or use unsupported syntax.
 
 ## Reference and licensing
 
