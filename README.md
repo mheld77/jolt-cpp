@@ -2,27 +2,188 @@
 
 A native C++20 library for Jolt-style JSON-to-JSON transformations. Pass a JSON document and a Chainr specification to `jolt::transform` to get the transformed JSON. The library runs without a JVM.
 
-## Build and test
+## 1. Install the build dependencies
 
-Requires CMake, a C++20 compiler, and nlohmann/json 3.11 or newer.
+The library requires CMake 3.18 or newer, a C++20 compiler, and nlohmann/json 3.11 or newer. On Debian 12 or Ubuntu 24.04, install the packages below.
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+sudo apt-get update
+sudo apt-get install -y git build-essential cmake nlohmann-json3-dev
+```
+
+On other systems, install equivalent packages and make sure CMake can find the `nlohmann_json` package.
+
+## 2. Clone and build
+
+```bash
+git clone --branch cpp --single-branch https://github.com/mheld77/jolt-cpp.git
+cd jolt-cpp
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel 2
+```
+
+The build produces the static library `build/libjolt_cpp.a` and the test executable `build/jolt_cpp_tests`.
+
+## 3. Run the test suite
+
+```bash
 ctest --test-dir build --output-on-failure
+```
+
+CTest should report `100% tests passed`. You can also run the test executable directly.
+
+```bash
+./build/jolt_cpp_tests
+```
+
+It prints `Jolt C++ tests passed` on success. The [test source](tests/transform.cpp) contains examples for nested paths, arrays, Unicode, chained operations, and error handling.
+
+## 4. Compile a runnable example
+
+From the repository root, create a small command-line program that reads an input file and a Chainr specification. It prints the transformed JSON to standard output and exits with an error status if the transformation fails.
+
+```bash
+cat > build/jolt-example.cpp <<'CPP'
+#include <jolt/jolt.hpp>
+
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+
+std::string read_file(const char* path) {
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error(std::string("Cannot open ") + path);
+    }
+    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
+
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "Usage: jolt-example INPUT.json SPEC.json\n";
+        return 2;
+    }
+
+    try {
+        std::cout << jolt::transform(read_file(argv[1]), read_file(argv[2])) << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}
+CPP
+
+c++ -std=c++20 -Iinclude build/jolt-example.cpp build/libjolt_cpp.a -o build/jolt-example
+```
+
+## 5. Run the examples and check the output
+
+### Rename a field and write it to a nested path
+
+```bash
+cat > build/input.json <<'JSON'
+{"title":"Coffee"}
+JSON
+cat > build/spec.json <<'JSON'
+[
+  {"operation":"shift","spec":{"title":"product.name"}}
+]
+JSON
+
+./build/jolt-example build/input.json build/spec.json
+```
+
+**Expected output**
+
+```json
+{"product":{"name":"Coffee"}}
+```
+
+### Transform each item in an array
+
+```bash
+cat > build/input.json <<'JSON'
+{"products":[{"id":1,"title":"Coffee","stock":6},{"id":2,"title":"Tea","stock":3}]}
+JSON
+cat > build/spec.json <<'JSON'
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "products": {
+        "*": {
+          "id": "items[&1].id",
+          "title": "items[&1].name"
+        }
+      }
+    }
+  }
+]
+JSON
+
+./build/jolt-example build/input.json build/spec.json
+```
+
+**Expected output**
+
+```json
+{"items":[{"id":1,"name":"Coffee"},{"id":2,"name":"Tea"}]}
+```
+
+### Chain multiple operations
+
+```bash
+cat > build/input.json <<'JSON'
+{"title":"Coffee","internalId":42}
+JSON
+cat > build/spec.json <<'JSON'
+[
+  {"operation":"default","spec":{"status":"active"}},
+  {"operation":"remove","spec":{"internalId":""}},
+  {"operation":"sort"}
+]
+JSON
+
+./build/jolt-example build/input.json build/spec.json
+```
+
+**Expected output**
+
+```json
+{"status":"active","title":"Coffee"}
+```
+
+### Check an unsupported specification
+
+Run this after any of the successful examples above. The example program should print an error and exit with a nonzero status.
+
+```bash
+cat > build/unsupported.json <<'JSON'
+[
+  {"operation":"modify-overwrite-beta","spec":{"title":"=toUpper"}}
+]
+JSON
+
+if ./build/jolt-example build/input.json build/unsupported.json; then
+    printf '%s\n' 'FAIL: an unsupported specification was accepted' >&2
+    exit 1
+else
+    printf '%s\n' 'PASS: the unsupported specification was rejected'
+fi
+```
+
+The executable prints `Modifier function or reference` to standard error. The shell check then prints `PASS: the unsupported specification was rejected`.
+
+## Install or link the library
+
+```bash
 cmake --install build --prefix "$PWD/build/install"
 ```
 
-Link the CMake target `jolt_cpp` or the installed static library `libjolt_cpp.a` and include [jolt/jolt.hpp](include/jolt/jolt.hpp).
-
-```cpp
-#include <jolt/jolt.hpp>
-
-auto result = jolt::transform(
-    R"({"title":"Coffee"})",
-    R"([{"operation":"shift","spec":{"title":"product.name"}}])");
-// {"product":{"name":"Coffee"}}
-```
+The install directory contains the static library, [public header](include/jolt/jolt.hpp), and license notices. If you include the source as a CMake subdirectory, link against the `jolt_cpp` target.
 
 ## Supported syntax
 
