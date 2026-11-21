@@ -4,14 +4,14 @@ A native C++20 library for Jolt-style JSON-to-JSON transformations. Pass a JSON 
 
 ## 1. Install the build dependencies
 
-The library requires CMake 3.18 or newer, a C++20 compiler, and nlohmann/json 3.11 or newer. On Debian 12 or Ubuntu 24.04, install the packages below.
+The library requires CMake 3.18 or newer, a C++20 compiler, nlohmann/json 3.11 or newer, and ICU. On Debian 12 or Ubuntu 24.04, install the packages below.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git build-essential cmake nlohmann-json3-dev
+sudo apt-get install -y git build-essential cmake nlohmann-json3-dev libicu-dev
 ```
 
-On other systems, install equivalent packages and make sure CMake can find the `nlohmann_json` package.
+On other systems, install equivalent packages and make sure CMake can find the `nlohmann_json` and ICU development packages.
 
 ## 2. Clone and build
 
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
 }
 CPP
 
-c++ -std=c++20 -Iinclude build/jolt-example.cpp build/libjolt_cpp.a -o build/jolt-example
+c++ -std=c++20 -Iinclude build/jolt-example.cpp build/libjolt_cpp.a -licui18n -licuuc -licudata -o build/jolt-example
 ```
 
 ## 5. Run the examples and check the output
@@ -156,6 +156,30 @@ JSON
 {"status":"active","title":"Coffee"}
 ```
 
+### Compute fields with a modifier
+
+```bash
+cat > build/input.json <<'JSON'
+{"title":"Café","price":"15"}
+JSON
+cat > build/spec.json <<'JSON'
+[
+  {
+    "operation":"modify-overwrite-beta",
+    "spec":{"name":"=toUpper(@(1,title))","price":"=toInteger"}
+  }
+]
+JSON
+
+./build/jolt-example build/input.json build/spec.json
+```
+
+**Expected output**
+
+```json
+{"title":"Café","price":15,"name":"CAFÉ"}
+```
+
 ### Check an unsupported specification
 
 Run this after any of the successful examples above. The example program should print an error and exit with a nonzero status.
@@ -163,7 +187,7 @@ Run this after any of the successful examples above. The example program should 
 ```bash
 cat > build/unsupported.json <<'JSON'
 [
-  {"operation":"modify-overwrite-beta","spec":{"title":"=toUpper"}}
+  {"operation":"modify-overwrite-beta","spec":{"title":"=dateAdd"}}
 ]
 JSON
 
@@ -175,7 +199,7 @@ else
 fi
 ```
 
-The executable prints `Modifier function or reference` to standard error. The shell check then prints `PASS: the unsupported specification was rejected`.
+The executable prints `Unsupported modifier function: dateAdd` to standard error. The shell check then prints `PASS: the unsupported specification was rejected`.
 
 ## Install or link the library
 
@@ -189,15 +213,16 @@ The install directory contains the static library, [public header](include/jolt/
 
 | Operation | Coverage |
 | --- | --- |
-| `shift` | Literal keys and alternatives, a single wildcard per pattern, nested output paths, `&n`, `&(n,1)`, explicit indexes, `[]`, `[#n]`, `@`, `@(n,path)`, `$n`, and `#value`. |
-| `default`, `remove`, `cardinality` | Literal keys, explicit indexes on existing arrays and simple wildcards. `remove` supports literal alternatives. Cardinality supports `ONE` and `MANY`. |
-| `modify-overwrite-beta`, `modify-default-beta`, `modify-define-beta` | Literal values and nested keys. |
+| `shift` | Literal keys and alternatives, multiple wildcard captures, nested output paths, `&n`, `&(n,1)`, explicit and transposed indexes, `[]`, `[#n]`, `@`, `@(n,path)`, `$n`, and `#value`. |
+| `default` | Literal keys, alternatives, wildcards, and array defaults with `field[]`. |
+| `remove`, `cardinality` | Literal keys, explicit indexes on existing arrays, and simple wildcards. `remove` supports literal alternatives. Cardinality supports `ONE` and `MANY`. |
+| `modify-overwrite-beta`, `modify-default-beta`, `modify-define-beta` | Literal values, nested keys, array indexes, wildcards, relative references, fallback expressions, per-key mode overrides, and built-in string, numeric, type conversion, and list functions. |
 | `sort` | Recursive sorting of object keys. |
 
-Compatibility with the Java DSL is partial. Modifier functions, transposed array indexes, multiple-wildcard patterns, custom Java classes, and extra operations such as `enrich` are outside the current coverage. The engine limits input and output size, nesting, array indexes, and work per transformation. See the header for public exception types.
+Compatibility with the Java DSL is partial. Some advanced matching rules and Community-specific functions remain unsupported, as do custom Java classes and extra operations such as `enrich`. Pass a JSON context as the third argument to `jolt::transform` to resolve modifier context references such as `^(1,key)`. The engine limits input and output size, nesting, array indexes, and work per transformation. See the header for public exception types.
 
 ## Reference and licensing
 
 [Jolt Community](https://github.com/jolt-community/jolt-community), a fork of Bazaarvoice Jolt, is the reference for the transformation contract. The C++ implementation and its reference revision are documented in [NOTICE](NOTICE).
 
-The library is distributed under the [Apache License 2.0](LICENSE). Its nlohmann/json dependency is distributed under the [MIT license](LICENSE.nlohmann-json).
+The library is distributed under the [Apache License 2.0](LICENSE). Its nlohmann/json dependency is distributed under the [MIT license](LICENSE.nlohmann-json). ICU is distributed under the terms in [LICENSE.ICU](LICENSE.ICU).

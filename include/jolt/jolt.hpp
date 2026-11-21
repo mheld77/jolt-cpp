@@ -24,5 +24,6 @@ public:
 
 // Executes a Chainr specification and serializes the transformed JSON.
 std::string transform(std::string_view input, std::string_view specification);
+std::string transform(std::string_view input, std::string_view specification, std::string_view context);
 
 }

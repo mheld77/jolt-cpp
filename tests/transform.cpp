@@ -41,9 +41,31 @@ int main() {
                 {"operation":"sort"}])",
            R"({"a":["x"],"items":2,"local":true,"tag":"changed","extra":5})");
     expect(R"({"a":1})", R"([{"operation":"shift","spec":{"a":"[0]"}}])", "[1]");
+    expect(R"({"rate-us-2026":9})",
+           R"jolt([{"operation":"shift","spec":{"rate-*-*":"rates.&(0,1).&(0,2)"}}])jolt",
+           R"({"rates":{"us":{"2026":9}}})");
+    expect(R"({"products":[{"id":1,"title":"Coffee"},{"id":0,"title":"Tea"}]})",
+           R"jolt([{"operation":"shift","spec":{"products":{"*":{"title":"items[@(1,id)]"}}}}])jolt",
+           R"({"items":["Tea","Coffee"]})");
+    expect(R"({"title":"café","price":"15","stock":[1,2,3],"missing":null,"code":"A10"})",
+           R"jolt([{"operation":"modify-overwrite-beta","spec":{
+             "title":"=toUpper","label":"=concat(@(1,title),' / ',@(1,price))",
+             "price":"=toInteger","count":"=size(@(1,stock))","piece":"=substring(@(1,code),1,3)",
+             "missing":["=notNull","fallback"]
+           }}])jolt",
+           R"({"title":"CAFÉ","label":"CAFÉ / 15","price":15,"stock":[1,2,3],"missing":"fallback","count":3,"piece":"10","code":"A10"})");
+    expect(R"({"present":null,"a":[1]})",
+           R"([{"operation":"modify-define-beta","spec":{"present":2,"absent":3,"a":{"[2]":5}}}])",
+           R"({"present":null,"a":[1,null,5],"absent":3})");
+    expect(R"({"items":[{"name":"Coffee"},{}]})",
+           R"([{"operation":"default","spec":{"items[]":{"0|1":{"active":true},"3":{"name":"Tea"},"*":{"name":"Unknown","active":false}}}}])",
+           R"({"items":[{"name":"Coffee","active":true},{"name":"Unknown","active":true},{"name":"Unknown","active":false},{"name":"Tea","active":false}]})");
+    if (Json::parse(transform("{}", R"([{"operation":"modify-default-beta","spec":{"locale":"^user.locale"}}])",
+                              R"({"user":{"locale":"en"}})")) != Json::parse(R"({"locale":"en"})"))
+        throw std::runtime_error("Context lookup failed");
 
     try {
-        transform("{}", R"([{"operation":"modify-overwrite-beta","spec":{"x":"=toUpper"}}])");
+        transform("{}", R"([{"operation":"modify-overwrite-beta","spec":{"x":"=dateAdd"}}])");
         throw std::runtime_error("Expected Unsupported");
     } catch (const jolt::Unsupported&) {}
     try {

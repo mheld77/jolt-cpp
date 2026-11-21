@@ -2,7 +2,9 @@
 // Native implementation of a subset of the JOLT Community Chainr contract.
 // See NOTICE for the original project and the differences in this implementation.
 #include "jolt/jolt.hpp"
+#include "modifier.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <nlohmann/json.hpp>
@@ -16,7 +18,6 @@ namespace jolt {
 namespace {
 
 using Json = nlohmann::ordered_json;
-using namespace std::string_view_literals;
 constexpr std::size_t max_bytes = 4 * 1024 * 1024;
 constexpr std::size_t max_depth = 128;
 constexpr std::size_t max_index = 100000;
@@ -60,7 +61,7 @@ void each(const Json& value, Function action) {
 struct Frame {
     std::string key;
     const Json* value;
-    std::optional<std::string> capture;
+    std::vector<std::string> captures;
     std::size_t matches{};
 };
 using Walk = std::vector<Frame>;
@@ -96,8 +97,8 @@ Reference read_reference(std::string_view expr, std::size_t& position) {
 const std::string& referenced_key(const Walk& walk, const Reference& ref) {
     const auto& matched = frame(walk, ref.parent);
     if (ref.group == 0) return matched.key;
-    if (ref.group == 1 && matched.capture) return *matched.capture;
-    throw Unsupported("Unsupported wildcard capture");
+    if (ref.group <= matched.captures.size()) return matched.captures[ref.group - 1];
+    throw Invalid("Wildcard capture does not exist");
 }
 
 std::string text_value(const Json& value) {
@@ -163,8 +164,14 @@ std::vector<PathPart> output_path(std::string_view path, const Walk& walk) {
             flush();
         } else if (ch == '[') {
             flush();
-            auto close = path.find(']', i);
-            if (close == path.npos) throw Invalid("Unclosed output index");
+            auto close = i;
+            std::size_t parentheses = 0;
+            for (; close < path.size(); ++close) {
+                if (path[close] == '(') ++parentheses;
+                else if (path[close] == ')' && parentheses) --parentheses;
+                else if (path[close] == ']' && !parentheses) break;
+            }
+            if (close == path.size()) throw Invalid("Unclosed output index");
             auto index = path.substr(i, close - i);
             if (index.empty()) result.push_back({PathPart::append, {}});
             else if (index.starts_with('#')) {
@@ -172,6 +179,15 @@ std::vector<PathPart> output_path(std::string_view path, const Walk& walk) {
                 auto ref = read_reference(index, position);
                 if (position != index.size() || ref.group != 0) throw Invalid("Invalid hash index");
                 result.push_back({PathPart::index, {}, frame(walk, ref.parent).matches});
+            } else if (index.starts_with("@(") && index.ends_with(')')) {
+                auto* data = transpose(walk, index.substr(2, index.size() - 3));
+                if (!data || (!data->is_string() && !data->is_number_integer())) return {};
+                auto integer = text_value(*data);
+                std::size_t value{};
+                auto [end, error] = std::from_chars(integer.data(), integer.data() + integer.size(), value);
+                if (error != std::errc{} || end != integer.data() + integer.size()) return {};
+                if (value > max_index) throw LimitExceeded("Output array limit exceeded");
+                result.push_back({PathPart::index, {}, value});
             } else {
                 auto reference = output_path(index, walk);
                 if (reference.size() != 1 || reference.front().kind != PathPart::field)
@@ -251,16 +267,52 @@ bool special_key(std::string_view key) {
            (key.starts_with("@(") && key.ends_with(')'));
 }
 
-std::optional<std::string> wildcard(std::string_view pattern, std::string_view key) {
-    const auto star = pattern.find('*');
-    if (star == pattern.npos) return {};
-    auto left = pattern.substr(0, star);
-    auto right = pattern.substr(star + 1);
-    if (right.find('*') != right.npos || pattern.find('|') != pattern.npos)
-        throw Unsupported("Multiple wildcard captures or wildcard alternatives");
-    if (key.size() < left.size() + right.size() || !key.starts_with(left) || !key.ends_with(right))
-        return {};
-    return std::string(key.substr(left.size(), key.size() - left.size() - right.size()));
+bool capture_pattern(const std::vector<std::string_view>& literals, unsigned index,
+                     std::string_view rest, std::vector<std::string>& captures, Budget& budget) {
+    budget.spend();
+    auto literal = literals[index];
+    if (index + 1 == literals.size()) {
+        if (!rest.ends_with(literal) || rest.size() <= literal.size()) return false;
+        captures.emplace_back(rest.substr(0, rest.size() - literal.size()));
+        return true;
+    }
+    for (auto next = rest.find(literal, 1); next != rest.npos;
+         next = rest.find(literal, next + 1)) {
+        budget.spend();
+        captures.emplace_back(rest.substr(0, next));
+        if (capture_pattern(literals, index + 1, rest.substr(next + literal.size()), captures, budget))
+            return true;
+        captures.pop_back();
+        if (next == rest.size()) break;
+    }
+    return false;
+}
+
+std::optional<std::vector<std::string>> wildcard(std::string_view pattern, std::string_view key, Budget& budget) {
+    while (true) {
+        const auto separator = pattern.find('|');
+        auto alt = pattern.substr(0, separator);
+        const auto star = alt.find('*');
+        if (star == alt.npos) {
+            if (alt == key) return std::vector<std::string>{};
+        } else if (key.starts_with(alt.substr(0, star))) {
+            std::vector<std::string_view> literals;
+            auto remainder = alt.substr(star + 1);
+            for (;;) {
+                auto next = remainder.find('*');
+                literals.push_back(remainder.substr(0, next));
+                if (next == remainder.npos) break;
+                remainder.remove_prefix(next + 1);
+            }
+            if (literals.size() > 16) throw LimitExceeded("Wildcard capture limit exceeded");
+            auto rest = key.substr(star);
+            std::vector<std::string> captures;
+            if (alt == "*" && rest.empty()) return std::vector<std::string>{""};
+            if (capture_pattern(literals, 0, rest, captures, budget)) return captures;
+        }
+        if (separator == pattern.npos) return {};
+        pattern.remove_prefix(separator + 1);
+    }
 }
 
 void validate_shift(const Json& spec) {
@@ -277,7 +329,8 @@ void validate_shift(const Json& spec) {
             }
             if (!special && key.find_first_of("@$#&[]()?+!\\") != key.npos)
                 throw Unsupported("Unsupported shift input operator");
-            if (!special && key.find('*') != key.npos) wildcard(key, ""sv);
+            if (std::count(key.begin(), key.end(), '*') > 16)
+                throw LimitExceeded("Wildcard capture limit exceeded");
             validate_shift(*it);
         }
     } else if (spec.is_array()) {
@@ -287,9 +340,6 @@ void validate_shift(const Json& spec) {
         }
     } else if (!spec.is_null()) {
         if (!spec.is_string()) throw Invalid("Invalid shift output path");
-        const auto& path = spec.get_ref<const std::string&>();
-        if (path.find("[@") != path.npos)
-            throw Unsupported("Unsupported array index expression");
     }
 }
 
@@ -314,7 +364,7 @@ void shift(const Json& source, const Json& spec, Walk& walk, Output& output, Bud
             std::size_t position = 1;
             match.key = key.starts_with('$') ? referenced_key(walk, read_reference(key, position))
                                              : std::string(key.substr(1));
-            match.capture.reset();
+            match.captures.clear();
             match.matches = 0;
             literal = match.key;
             value = &literal;
@@ -334,9 +384,9 @@ void shift(const Json& source, const Json& spec, Walk& walk, Output& output, Bud
                 std::string_view pattern = it.key();
                 if (special_key(pattern)) continue;
                 if ((pattern.find('*') != pattern.npos) != wild) continue;
-                auto capture = wild ? wildcard(pattern, key) : std::nullopt;
+                auto capture = wild ? wildcard(pattern, key, budget) : std::nullopt;
                 if (wild ? !capture.has_value() : !literal_or(pattern, key)) continue;
-                walk.push_back({key, &value, std::move(capture)});
+                walk.push_back({key, &value, capture.value_or(std::vector<std::string>{})});
                 shift(value, *it, walk, output, budget);
                 walk.pop_back();
                 ++walk.back().matches;
@@ -348,7 +398,75 @@ void shift(const Json& source, const Json& spec, Walk& walk, Output& output, Bud
     else if (!source.is_null()) match_child(text_value(source), Json(nullptr));
 }
 
-enum class Edit { defaults, remove, cardinality, overwrite, define };
+void defaults(Json& target, const Json& spec, Budget& budget);
+
+void set_default(Json& target, const Json& spec, bool array, Budget& budget) {
+    if (!spec.is_object()) {
+        if (target.is_null()) {
+            budget.spend(spec.dump().size() / 16 + 1);
+            target = spec;
+        }
+        return;
+    }
+    if (target.is_null()) target = array ? Json::array() : Json::object();
+    if ((array && target.is_array()) || (!array && target.is_object()))
+        defaults(target, spec, budget);
+}
+
+void defaults(Json& target, const Json& spec, Budget& budget) {
+    if (!spec.is_object()) throw Invalid("Default requires an object specification");
+    if (!target.is_structured()) return;
+
+    struct DefaultRule {
+        std::string_view name;
+        const Json* value;
+        bool array;
+        std::size_t alternatives;
+    };
+    std::vector<DefaultRule> rules;
+    rules.reserve(spec.size());
+    for (auto it = spec.begin(); it != spec.end(); ++it) {
+        std::string_view name = it.key();
+        const bool array = name.ends_with("[]");
+        if (array) name.remove_suffix(2);
+        if (name.empty() || (name != "*" && name.find_first_of("*[]") != name.npos))
+            throw Unsupported("Unsupported default key");
+        if (array && !it->is_object()) throw Invalid("Array default requires an object specification");
+        const auto alternatives = static_cast<std::size_t>(std::count(name.begin(), name.end(), '|'));
+        rules.push_back({name, &*it, array, alternatives});
+    }
+    std::sort(rules.begin(), rules.end(), [](const DefaultRule& a, const DefaultRule& b) {
+        if ((a.name == "*") != (b.name == "*")) return b.name == "*";
+        if (a.alternatives != b.alternatives) return a.alternatives < b.alternatives;
+        return a.name < b.name;
+    });
+    for (const auto& rule : rules) {
+        budget.spend();
+        if (rule.name == "*" || rule.alternatives) {
+            if (target.is_array()) {
+                for (std::size_t i = 0; i < target.size(); ++i) {
+                    budget.spend();
+                    if (rule.name == "*" || literal_or(rule.name, std::to_string(i)))
+                        set_default(target[i], *rule.value, rule.array, budget);
+                }
+            } else {
+                for (auto it = target.begin(); it != target.end(); ++it) {
+                    budget.spend();
+                    if (rule.name == "*" || literal_or(rule.name, it.key()))
+                        set_default(*it, *rule.value, rule.array, budget);
+                }
+            }
+        } else if (target.is_array()) {
+            auto index = number(rule.name);
+            if (index >= target.size()) budget.spend(index + 1 - target.size());
+            set_default(target[index], *rule.value, rule.array, budget);
+        } else {
+            set_default(target[std::string(rule.name)], *rule.value, rule.array, budget);
+        }
+    }
+}
+
+enum class Edit { remove, cardinality };
 
 void validate_edit(const Json& spec, Edit mode) {
     if (!spec.is_object()) throw Invalid("Operation requires an object specification");
@@ -363,13 +481,6 @@ void validate_edit(const Json& spec, Edit mode) {
             throw Invalid("Cardinality must be ONE or MANY");
         else if (mode == Edit::remove && !it->is_string())
             throw Invalid("Remove leaf must be a string");
-        else if ((mode == Edit::overwrite || mode == Edit::define) && it->is_array())
-            throw Unsupported("Modifier candidate lists");
-        else if ((mode == Edit::overwrite || mode == Edit::define) && it->is_string()) {
-            const auto& value = it->get_ref<const std::string&>();
-            if (value.starts_with('=') || value.starts_with('@') || value.starts_with('^'))
-                throw Unsupported("Modifier function or reference");
-        }
     }
 }
 
@@ -377,16 +488,11 @@ void edit(Json& target, const Json& spec, Edit mode, Budget& budget);
 
 void edit_child(Json& child, const Json& rule, Edit mode, Budget& budget) {
     if (rule.is_object()) {
-        if (child.is_null() && (mode == Edit::defaults || mode == Edit::overwrite || mode == Edit::define))
-            child = Json::object();
         edit(child, rule, mode, budget);
     } else if (mode == Edit::cardinality) {
         if (rule == "ONE" && child.is_array()) child = child.empty() ? Json(nullptr) : Json(child[0]);
         if (rule == "MANY" && !child.is_array())
             child = child.is_null() ? Json::array() : Json::array({child});
-    } else if (mode == Edit::overwrite || (mode == Edit::defaults && child.is_null())) {
-        budget.spend(rule.is_structured() ? rule.dump().size() / 16 + 1 : 1);
-        child = rule;
     }
 }
 
@@ -421,9 +527,6 @@ void edit(Json& target, const Json& spec, Edit mode, Budget& budget) {
                 if (child != target.end()) target.erase(child);
             } else if (child != target.end()) {
                 edit_child(*child, rule, mode, budget);
-            } else if (mode == Edit::defaults || mode == Edit::overwrite || mode == Edit::define) {
-                if (mode == Edit::define && !rule.is_object()) target[key] = rule;
-                else edit_child(target[key], rule, mode, budget);
             }
         }
     };
@@ -456,9 +559,15 @@ void check_depth(const Json& value, std::size_t depth = 0) {
 } // namespace
 
 std::string transform(std::string_view input, std::string_view specification) {
+    return transform(input, specification, "{}");
+}
+
+std::string transform(std::string_view input, std::string_view specification, std::string_view context) {
     try {
         auto source = parse(input);
         const auto steps = parse(specification);
+        const auto context_data = parse(context);
+        if (!context_data.is_object()) throw Invalid("Chainr context must be an object");
         if (!steps.is_array() || steps.empty() || steps.size() > 64)
             throw Invalid("Expected a nonempty Chainr array with at most 64 operations");
         Budget budget;
@@ -476,20 +585,26 @@ std::string transform(std::string_view input, std::string_view specification) {
             if (operation == "shift") {
                 if (!spec.is_object()) throw Invalid("Shift requires an object specification");
                 validate_shift(spec);
-                Walk walk{{"", &source, std::nullopt}};
+                Walk walk{{"", &source, {}}};
                 Output output{nullptr, {}, budget};
                 shift(source, spec, walk, output, budget);
                 source = std::move(output.value);
+            } else if (operation.starts_with("modify-")) {
+                using detail::ModifyMode;
+                ModifyMode mode;
+                if (operation == "modify-overwrite-beta") mode = ModifyMode::overwrite;
+                else if (operation == "modify-default-beta") mode = ModifyMode::defaults;
+                else if (operation == "modify-define-beta") mode = ModifyMode::define;
+                else throw Unsupported("Operation is not implemented by this native library");
+                detail::modify(source, spec, context_data, mode, budget.remaining);
+            } else if (operation == "default") {
+                defaults(source, spec, budget);
             } else {
                 Edit mode;
-                if (operation == "default" || operation == "modify-default-beta") mode = Edit::defaults;
-                else if (operation == "remove") mode = Edit::remove;
+                if (operation == "remove") mode = Edit::remove;
                 else if (operation == "cardinality") mode = Edit::cardinality;
-                else if (operation == "modify-overwrite-beta") mode = Edit::overwrite;
-                else if (operation == "modify-define-beta") mode = Edit::define;
                 else throw Unsupported("Operation is not implemented by this native library");
                 validate_edit(spec, mode);
-                if (operation == "modify-default-beta") validate_edit(spec, Edit::overwrite);
                 edit(source, spec, mode, budget);
             }
             check_depth(source);

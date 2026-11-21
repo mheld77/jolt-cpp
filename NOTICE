@@ -12,3 +12,4 @@ nlohmann/json. They do not contain the Java runtime or a translation of the
 upstream Java source files. The supported syntax is documented in README.md.
 
 The C++ library uses nlohmann/json, licensed under MIT.
+ICU provides Unicode casing and regular expressions. See LICENSE.ICU.
